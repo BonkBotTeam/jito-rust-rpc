@@ -126,20 +126,24 @@ impl JitoJsonRpcSDK {
             .map_err(|e| anyhow!("Request error: {}", e))
     }
 
-    pub async fn send_bundle(&self, params: Option<Value>, uuid: Option<&str>) -> Result<Value, anyhow::Error> {
+    pub async fn send_bundle(
+        &self,
+        params: Option<Value>,
+        uuid: Option<&str>,
+    ) -> Result<Value, anyhow::Error> {
         let mut endpoint = "/bundles".to_string();
-        
+
         if let Some(uuid) = uuid {
             endpoint = format!("{}?uuid={}", endpoint, uuid);
         }
-    
+
         // Create the parameters for the request
         let request_params = match params {
             // If params is already in the correct format [transactions, {encoding: "base64"}]
             Some(ref value) if value.is_array() && value.as_array().unwrap().len() == 2 => {
                 // Use it as is
                 value.clone()
-            },
+            }
             Some(Value::Array(transactions)) => {
                 // Validate transactions
                 if transactions.is_empty() {
@@ -148,23 +152,31 @@ impl JitoJsonRpcSDK {
                 if transactions.len() > 5 {
                     return Err(anyhow!("Bundle can contain at most 5 transactions"));
                 }
-                
+
                 json!([
                     transactions,
                     {
                         "encoding": "base64"
                     }
                 ])
-            },
-            _ => return Err(anyhow!("Invalid bundle format: expected an array of transactions")),
+            }
+            _ => {
+                return Err(anyhow!(
+                    "Invalid bundle format: expected an array of transactions"
+                ))
+            }
         };
-    
+
         self.send_request(&endpoint, "sendBundle", Some(request_params))
             .await
             .map_err(|e| anyhow!("Request error: {}", e))
     }
 
-    pub async fn send_txn(&self, params: Option<Value>, bundle_only: bool) -> Result<Value, reqwest::Error> {
+    pub async fn send_txn(
+        &self,
+        params: Option<Value>,
+        bundle_only: bool,
+    ) -> Result<Value, reqwest::Error> {
         let mut query_params = Vec::new();
 
         if bundle_only {
@@ -180,7 +192,10 @@ impl JitoJsonRpcSDK {
         let params = match params {
             Some(Value::Object(map)) => {
                 let tx = map.get("tx").and_then(Value::as_str).unwrap_or_default();
-                let skip_preflight = map.get("skipPreflight").and_then(Value::as_bool).unwrap_or(false);
+                let skip_preflight = map
+                    .get("skipPreflight")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 json!([
                     tx,
                     {
@@ -188,11 +203,12 @@ impl JitoJsonRpcSDK {
                         "skipPreflight": skip_preflight
                     }
                 ])
-            },
+            }
             _ => json!([]),
         };
 
-        self.send_request(&endpoint, "sendTransaction", Some(params)).await
+        self.send_request(&endpoint, "sendTransaction", Some(params))
+            .await
     }
 
     pub async fn get_in_flight_bundle_statuses(&self, bundle_uuids: Vec<String>) -> Result<Value> {
@@ -209,7 +225,7 @@ impl JitoJsonRpcSDK {
             .map_err(|e| anyhow!("Request error: {}", e))
     }
 
-    // Helper method 
+    // Helper method
     pub fn prettify(value: Value) -> PrettyJsonValue {
         PrettyJsonValue(value)
     }
