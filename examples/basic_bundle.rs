@@ -4,17 +4,17 @@ use serde_json::json;
 use solana_client::rpc_client::RpcClient;
 
 use solana_instruction::{AccountMeta, Instruction};
-use solana_pubkey::Pubkey;
 use solana_keypair::Keypair;
-use solana_signer::{Signer, EncodableKey};
-use solana_program::system_instruction;
+use solana_pubkey::Pubkey;
+use solana_signer::{EncodableKey as _, Signer as _};
+use solana_system_interface::instruction as system_instruction;
 use solana_transaction::Transaction;
 
+use base64::{engine::general_purpose, Engine as _};
 use std::str::FromStr;
 use tokio::time::{sleep, Duration};
-use tracing::{info, debug, warn, error};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
-use base64::{Engine as _, engine::general_purpose};
 
 #[derive(Debug)]
 struct BundleStatus {
@@ -29,8 +29,7 @@ fn init_tracing() {
     // Use RUST_LOG=off to disable logging entirely
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info"))
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 }
@@ -46,7 +45,7 @@ async fn main() -> Result<()> {
     // Setup client Jito Block Engine endpoint
     // Option 1: No UUID - pass None directly
     let jito_sdk = JitoJsonRpcSDK::new("https://mainnet.block-engine.jito.wtf/api/v1", None);
-    
+
     // Option 2: With UUID - uncomment this instead if you have a UUID
     // let uuid_string = "your-uuid-here".to_string();
     // let jito_sdk = JitoJsonRpcSDK::new("https://mainnet.block-engine.jito.wtf/api/v1", Some(uuid_string));
@@ -66,16 +65,10 @@ async fn main() -> Result<()> {
     let jito_tip_amount = 3_000; // 0.000003 SOL
 
     // Create transfer instructions using system_instruction from solana-program
-    let main_transfer_ix = system_instruction::transfer(
-        &sender.pubkey(),
-        &receiver,
-        main_transfer_amount,
-    );
-    let jito_tip_ix = system_instruction::transfer(
-        &sender.pubkey(),
-        &jito_tip_account,
-        jito_tip_amount,
-    );
+    let main_transfer_ix =
+        system_instruction::transfer(&sender.pubkey(), &receiver, main_transfer_amount);
+    let jito_tip_ix =
+        system_instruction::transfer(&sender.pubkey(), &jito_tip_account, jito_tip_amount);
 
     // Create memo instruction
     let memo_program_id = Pubkey::from_str("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")?;
@@ -97,10 +90,10 @@ async fn main() -> Result<()> {
 
     // Serialize the transaction using base64
     let serialized_tx = general_purpose::STANDARD.encode(bincode::serialize(&transaction)?);
-    
+
     // Prepare bundle for submission (array of transactions)
     let transactions = json!([serialized_tx]);
-    
+
     // Create parameters with encoding specification
     let params = json!([
         transactions,
@@ -111,28 +104,33 @@ async fn main() -> Result<()> {
 
     // Send bundle using Jito SDK
     info!("Sending bundle with 1 transaction...");
-    
+
     // Option 1: No UUID for send_bundle - pass None
     let response = jito_sdk.send_bundle(Some(params), None).await?;
-    
+
     // Option 2: With UUID for send_bundle - uncomment this instead if you have a UUID
     //let response = jito_sdk.send_bundle(Some(params), Some(uuid_string.as_str())).await?;
- 
+
     // Extract bundle UUID from response
     let bundle_uuid = response["result"]
         .as_str()
         .ok_or_else(|| anyhow!("Failed to get bundle UUID from response"))?;
     info!("Bundle sent with UUID: {}", bundle_uuid);
- 
+
     // Confirm bundle status
     let max_retries = 30;
     let retry_delay = Duration::from_secs(2);
- 
+
     for attempt in 1..=max_retries {
-        debug!("Checking bundle status (attempt {}/{})", attempt, max_retries);
- 
-        let status_response = jito_sdk.get_in_flight_bundle_statuses(vec![bundle_uuid.to_string()]).await?;
- 
+        debug!(
+            "Checking bundle status (attempt {}/{})",
+            attempt, max_retries
+        );
+
+        let status_response = jito_sdk
+            .get_in_flight_bundle_statuses(vec![bundle_uuid.to_string()])
+            .await?;
+
         if let Some(result) = status_response.get("result") {
             if let Some(value) = result.get("value") {
                 if let Some(statuses) = value.as_array() {
@@ -142,22 +140,24 @@ async fn main() -> Result<()> {
                                 Some("Landed") => {
                                     info!("Bundle landed on-chain. Checking final status...");
                                     return check_final_bundle_status(&jito_sdk, bundle_uuid).await;
-                                },
+                                }
                                 Some("Pending") => {
                                     debug!("Bundle is pending. Waiting...");
-                                },
+                                }
                                 Some("Failed") => {
                                     error!("Bundle failed. Stopping polling process.");
                                     return Err(anyhow!("Bundle status returned Failed"));
-                                },
+                                }
                                 // For "Invalid" status, we'll log a warning but continue polling
                                 // since this might be a transient state
                                 Some("Invalid") => {
-                                    warn!("Bundle currently marked as invalid. Continuing to poll...");
-                                },
+                                    warn!(
+                                        "Bundle currently marked as invalid. Continuing to poll..."
+                                    );
+                                }
                                 Some(status) => {
                                     warn!("Unexpected bundle status: {}. Waiting...", status);
-                                },
+                                }
                                 None => {
                                     warn!("Unable to parse bundle status. Waiting...");
                                 }
@@ -179,13 +179,16 @@ async fn main() -> Result<()> {
         } else {
             warn!("Unexpected response format. Waiting...");
         }
- 
+
         if attempt < max_retries {
             sleep(retry_delay).await;
         }
     }
- 
-    Err(anyhow!("Failed to confirm bundle status after {} attempts", max_retries))
+
+    Err(anyhow!(
+        "Failed to confirm bundle status after {} attempts",
+        max_retries
+    ))
 }
 
 async fn check_final_bundle_status(jito_sdk: &JitoJsonRpcSDK, bundle_uuid: &str) -> Result<()> {
@@ -193,25 +196,33 @@ async fn check_final_bundle_status(jito_sdk: &JitoJsonRpcSDK, bundle_uuid: &str)
     let retry_delay = Duration::from_secs(2);
 
     for attempt in 1..=max_retries {
-        debug!("Checking final bundle status (attempt {}/{})", attempt, max_retries);
+        debug!(
+            "Checking final bundle status (attempt {}/{})",
+            attempt, max_retries
+        );
 
-        let status_response = jito_sdk.get_bundle_statuses(vec![bundle_uuid.to_string()]).await?;
+        let status_response = jito_sdk
+            .get_bundle_statuses(vec![bundle_uuid.to_string()])
+            .await?;
         let bundle_status = get_bundle_status(&status_response)?;
 
         match bundle_status.confirmation_status.as_deref() {
             Some("confirmed") => {
                 info!("Bundle confirmed on-chain. Waiting for finalization...");
                 check_transaction_error(&bundle_status)?;
-            },
+            }
             Some("finalized") => {
                 info!("Bundle finalized on-chain successfully!");
                 check_transaction_error(&bundle_status)?;
                 print_transaction_url(&bundle_status);
                 return Ok(());
-            },
+            }
             Some(status) => {
-                warn!("Unexpected final bundle status: {}. Continuing to poll...", status);
-            },
+                warn!(
+                    "Unexpected final bundle status: {}. Continuing to poll...",
+                    status
+                );
+            }
             None => {
                 warn!("Unable to parse final bundle status. Continuing to poll...");
             }
@@ -222,7 +233,10 @@ async fn check_final_bundle_status(jito_sdk: &JitoJsonRpcSDK, bundle_uuid: &str)
         }
     }
 
-    Err(anyhow!("Failed to get finalized status after {} attempts", max_retries))
+    Err(anyhow!(
+        "Failed to get finalized status after {} attempts",
+        max_retries
+    ))
 }
 
 fn get_bundle_status(status_response: &serde_json::Value) -> Result<BundleStatus> {
