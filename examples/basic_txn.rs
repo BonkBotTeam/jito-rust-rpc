@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
     // Common paths:
     // - Linux/Mac: "/home/username/.config/solana/id.json"
     // - Or generate a test keypair: `solana-keygen new --outfile ./test-keypair.json`
-    let wallet_path = std::env::var("/path/to/wallet-keypair.json").unwrap_or_else(|_| {
+    let wallet_path = std::env::var("WALLET_PATH").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         format!("{}/.config/solana/id.json", home)
     });
